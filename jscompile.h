@@ -136,11 +136,18 @@ struct js_Function
 
 	js_Function *gcnext;
 	int gcmark;
+
+    char *codebits;
 };
 
 js_Function *jsC_compilefunction(js_State *J, js_Ast *prog);
 js_Function *jsC_compilescript(js_State *J, js_Ast *prog, int default_strict);
+
 const char *jsC_opcodestring(enum js_OpCode opcode);
+
 void jsC_dumpfunction(js_State *J, js_Function *fun);
+
+int jsC_function_serialization(js_State *J, js_Function *fun, char* buffer, int* len, int depth);
+js_Function* jsC_function_deserialization(js_State *J, const char* name, char** buffer, int depth);
 
 #endif

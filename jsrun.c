@@ -47,7 +47,7 @@ void *js_realloc(js_State *J, void *ptr, int size)
 
 char *js_strdup(js_State *J, const char *s)
 {
-	int n = strlen(s) + 1;
+	int n = (int)strlen(s) + 1;
 	char *p = js_malloc(J, n);
 	memcpy(p, s, n);
 	return p;
@@ -63,7 +63,7 @@ js_String *jsV_newmemstring(js_State *J, const char *s, int n)
 	js_String *v = js_malloc(J, soffsetof(js_String, p) + n + 1);
 	memcpy(v->p, s, n);
 	v->p[n] = 0;
-	v->gcmark = 0;
+	v->gcmark = J->gcmark;
 	v->gcnext = J->gcstr;
 	J->gcstr = v;
 	++J->gccounter;
@@ -111,7 +111,7 @@ void js_pushnumber(js_State *J, double v)
 
 void js_pushstring(js_State *J, const char *v)
 {
-	int n = strlen(v);
+	int n = (int)strlen(v);
 	CHECKSTACK(1);
 	if (n <= soffsetof(js_Value, type)) {
 		char *s = STACK[TOP].u.shrstr;
@@ -294,6 +294,14 @@ js_Object *js_toobject(js_State *J, int idx)
 	return jsV_toobject(J, stackidx(J, idx));
 }
 
+js_Object *js_asobject(js_State *J, int idx) {
+    js_Value* v = stackidx(J, idx);
+    if(v && v->type == JS_TOBJECT) {
+        return v->u.object;
+    }
+    return NULL;
+}
+
 void js_toprimitive(js_State *J, int idx, int hint)
 {
 	jsV_toprimitive(J, stackidx(J, idx), hint);
@@ -453,7 +461,8 @@ int js_isarrayindex(js_State *J, const char *p, int *idx)
 			return 0;
 		}
 	}
-	return *idx = n, 1;
+    *idx = n;
+	return 1;
 }
 
 static void js_pushrune(js_State *J, Rune rune)
@@ -516,7 +525,7 @@ static int jsR_hasproperty(js_State *J, js_Object *obj, const char *name)
 	}
 
 	else if (obj->type == JS_CUSERDATA) {
-		if (obj->u.user.has && obj->u.user.has(J, obj->u.user.data, name))
+		if (obj->u.user.has && obj->u.user.has(J, obj->u.user.data, name, obj->u.user.tag))
 			return 1;
 	}
 
@@ -582,7 +591,7 @@ static void jsR_setproperty(js_State *J, js_Object *obj, const char *name)
 	}
 
 	else if (obj->type == JS_CUSERDATA) {
-		if (obj->u.user.put && obj->u.user.put(J, obj->u.user.data, name))
+		if (obj->u.user.put && obj->u.user.put(J, obj->u.user.data, name, obj->u.user.tag))
 			return;
 	}
 
@@ -626,6 +635,9 @@ static void jsR_defproperty(js_State *J, js_Object *obj, const char *name,
 {
 	js_Property *ref;
 	int k;
+    if(strcmp(name, "__esModule") == 0) {
+        return;
+    }
 
 	if (obj->type == JS_CARRAY) {
 		if (!strcmp(name, "length"))
@@ -649,7 +661,7 @@ static void jsR_defproperty(js_State *J, js_Object *obj, const char *name,
 	}
 
 	else if (obj->type == JS_CUSERDATA) {
-		if (obj->u.user.put && obj->u.user.put(J, obj->u.user.data, name))
+		if (obj->u.user.put && obj->u.user.put(J, obj->u.user.data, name, obj->u.user.tag))
 			return;
 	}
 
@@ -710,7 +722,7 @@ static int jsR_delproperty(js_State *J, js_Object *obj, const char *name)
 	}
 
 	else if (obj->type == JS_CUSERDATA) {
-		if (obj->u.user.delete && obj->u.user.delete(J, obj->u.user.data, name))
+		if (obj->u.user.deleteFun && obj->u.user.deleteFun(J, obj->u.user.data, name, obj->u.user.tag))
 			return 1;
 	}
 
@@ -842,7 +854,7 @@ const char *js_nextiterator(js_State *J, int idx)
 js_Environment *jsR_newenvironment(js_State *J, js_Object *vars, js_Environment *outer)
 {
 	js_Environment *E = js_malloc(J, sizeof *E);
-	E->gcmark = 0;
+	E->gcmark = J->gcmark;
 	E->gcnext = J->gcenv;
 	J->gcenv = E;
 	++J->gccounter;
@@ -1310,7 +1322,7 @@ static void jsR_run(js_State *J, js_Function *F)
 
 	while (1) {
 		if (J->gccounter > JS_GCLIMIT)
-			js_gc(J, 0);
+			js_gc(J, 1);
 
 		J->trace[J->tracetop].line = *pc++;
 

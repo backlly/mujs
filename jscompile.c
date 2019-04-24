@@ -25,7 +25,7 @@ void jsC_error(js_State *J, js_Ast *node, const char *fmt, ...)
 	vsnprintf(msgbuf, 256, fmt, ap);
 	va_end(ap);
 
-	snprintf(buf, 256, "%s:%d: ", J->filename, node->line);
+    snprintf(buf, 256, "%s:%d: ", J->filename, node ? node->line : 0);
 	strcat(buf, msgbuf);
 
 	js_newsyntaxerror(J, buf);
@@ -55,7 +55,7 @@ static js_Function *newfun(js_State *J, int line, js_Ast *name, js_Ast *params, 
 {
 	js_Function *F = js_malloc(J, sizeof *F);
 	memset(F, 0, sizeof *F);
-	F->gcmark = 0;
+	F->gcmark = J->gcmark;
 	F->gcnext = J->gcfun;
 	J->gcfun = F;
 	++J->gccounter;
@@ -1447,4 +1447,262 @@ js_Function *jsC_compilefunction(js_State *J, js_Ast *prog)
 js_Function *jsC_compilescript(js_State *J, js_Ast *prog, int default_strict)
 {
 	return newfun(J, prog ? prog->line : 0, NULL, NULL, prog, 1, default_strict);
+}
+
+// ##########################################################################################
+static int8_t writeShort(js_State *J, char* out, int data) {
+    if(data > 65535) {
+        jsC_error(J, NULL, "writeShort fail : %d", data);
+    }
+    out[0] = (char)(data & 0xFF);
+    out[1] = (char)((data >> 8) & 0xFF);
+    return 2;
+}
+static int8_t writeInt(js_State *J, char* out, int data) {
+    out[0] = (char)(data & 0xFF);
+    out[1] = (char)((data >> 8) & 0xFF);
+    out[2] = (char)((data >> 16) & 0xFF);
+    out[3] = (char)((data >> 24) & 0xFF);
+    return 4;
+}
+static int8_t writeDouble(js_State *J, char* out, double data) {
+    uint64_t tmp = ((uint64_t*)&data)[0];
+    out[0] = (char)(tmp & 0xFF);
+    out[1] = (char)((tmp >> 8) & 0xFF);
+    out[2] = (char)((tmp >> 16) & 0xFF);
+    out[3] = (char)((tmp >> 24) & 0xFF);
+    out[4] = (char)((tmp >> 32) & 0xFF);
+    out[5] = (char)((tmp >> 40) & 0xFF);
+    out[6] = (char)((tmp >> 48) & 0xFF);
+    out[7] = (char)((tmp >> 56) & 0xFF);
+    return 8;
+}
+static int16_t writeStr(js_State *J, char* out, const char* data, int len) {
+    if(len <= 0) {
+        len = (int)strlen(data);
+    }
+    if(len > 65535) {
+        jsC_error(J, NULL, "writeStr fail : %d", len);
+    }
+    out += writeShort(J, out, len);
+    for(int i = 0; i < len; ++i) {
+        out[i] = data[i];
+    }
+    out[len] = 0;
+    return len + 3;
+}
+
+// encode js_Function to string
+int jsC_function_serialization(js_State *J, js_Function *fun, char* cursor, int* len, int depth) {
+    int str_len = 0;
+    char* out = cursor;
+    // only write filename once
+    if(depth == 1) {
+        *len = 0;
+        //    const char *filename;
+        str_len = (int)strlen(fun->filename);
+        *len += str_len + 3;
+        if(out) {
+            out += writeStr(J, out, fun->filename, str_len);
+        }
+    }
+    //    const char *name;
+    str_len = (int)strlen(fun->name);
+    *len += str_len + 3;
+    if(out) {
+        out += writeStr(J, out, fun->name, str_len);
+    }
+    //    int script;
+    *len += 2;
+    if(out) { out += writeShort(J, out, fun->script); }
+    //    int lightweight;
+    *len += 2;
+    if(out) { out += writeShort(J, out, fun->lightweight); }
+    //    int strict;
+    *len += 2;
+    if(out) { out += writeShort(J, out, fun->strict); }
+    //    int arguments;
+    *len += 2;
+    if(out) { out += writeShort(J, out, fun->arguments); }
+    //    int numparams;
+    *len += 2;
+    if(out) { out += writeShort(J, out, fun->numparams); }
+    //
+    //    unsigned int *code;
+    //    int codecap, codelen;
+    *len += fun->codelen * 2 + 4;
+    if(out) {
+        out += writeInt(J, out, fun->codelen);
+        for(int i = 0; i < fun->codelen; ++i) {
+            out += writeShort(J, out, (fun->code)[i]);
+        }
+    }
+    //
+    //    double *numtab;
+    //    int numcap, numlen;
+    *len += fun->numlen * 8 + 4;
+    if(out) {
+        out += writeInt(J, out, fun->numlen);
+        for(int i = 0; i < fun->numlen; ++i) {
+            out += writeDouble(J, out, (fun->numtab)[i]);
+        }
+    }
+    //
+    //    const char **strtab;
+    //    int strcap, strlen;
+    *len += 4;
+    if(out) out += writeInt(J, out, fun->strlen);
+    for(int i = 0; i < fun->strlen; ++i) {
+        str_len = (int)strlen( (fun->strtab)[i] );
+        *len += str_len + 3;
+        if(out) {
+            out += writeStr(J, out, (fun->strtab)[i], str_len);
+        }
+    }
+    //
+    //    const char **vartab;
+    //    int varcap, varlen;
+    *len += 4;
+    if(out) out += writeInt(J, out, fun->varlen);
+    for(int i = 0; i < fun->varlen; ++i) {
+        str_len = (int)strlen( (fun->vartab)[i] );
+        *len += str_len + 3;
+        if(out) {
+            out += writeStr(J, out, (fun->vartab)[i], str_len);
+        }
+    }
+    //    int line, lastline;
+    *len += 4;
+    if(out) { out += writeInt(J, out, fun->line); }
+    *len += 4;
+    if(out) { out += writeInt(J, out, fun->lastline); }
+    //
+    //    Function **funtab;
+    //    int funcap, funlen;
+    *len += 2;
+    if(out) {
+        out += writeShort(J, out, fun->funlen);
+    }
+    for(int i = 0; i < fun->funlen; ++i) {
+        out += jsC_function_serialization(J, (fun->funtab)[i], out, len, depth + 1);
+    }
+    return (int)(out - cursor);
+}
+
+// ##########################################################################################
+int readShort(js_State *J, char** buffer) {
+    int a = (*buffer)[0] & 0xFF;
+    int b = (*buffer)[1] & 0xFF;
+    *buffer += 2;
+    return ((b << 8) | a);
+}
+int readInt(js_State *J, char** buffer) {
+    int a = (*buffer)[0] & 0xFF;
+    int b = (*buffer)[1] & 0xFF;
+    int c = (*buffer)[2] & 0xFF;
+    int d = (*buffer)[3] & 0xFF;
+    *buffer += 4;
+    return ((d << 24) | (c << 16) | (b << 8) | a);
+}
+double readDouble(js_State *J, char** buffer) {
+    double ret = 0;
+    uint64_t a = (*buffer)[0] & 0xFF;
+    uint64_t b = (*buffer)[1] & 0xFF;
+    uint64_t c = (*buffer)[2] & 0xFF;
+    uint64_t d = (*buffer)[3] & 0xFF;
+    uint64_t a1 = (*buffer)[4] & 0xFF;
+    uint64_t b1 = (*buffer)[5] & 0xFF;
+    uint64_t c1 = (*buffer)[6] & 0xFF;
+    uint64_t d1 = (*buffer)[7] & 0xFF;
+    *buffer += 8;
+    ((uint64_t*)&ret)[0] = ((d1 << 56) | (c1 << 48) | (b1 << 40) | (a1 << 32) | (d << 24) | (c << 16) | (b << 8) | a);
+    return ret;
+}
+const char* readStr(js_State *J, char** buffer) {
+    int str_len = readShort(J, buffer);
+    char* cursor = *buffer;
+    *buffer = cursor + str_len + 1;
+    return cursor;
+}
+// decode js_Function from string
+js_Function* jsC_function_deserialization(js_State *J, const char* name, char** buffer, int depth) {
+    js_Function *F = js_malloc(J, sizeof *F);
+    memset(F, 0, sizeof *F);
+    F->codebits = *buffer;
+    F->gcnext = J->gcfun;
+    J->gcfun = F;
+    ++J->gccounter;
+    if(depth == 1) {
+        //    const char *filename;[short, str]
+        F->filename = readStr(J, buffer);
+    } else {
+        F->filename = name ? name : "unknown";
+    }
+    //printf("deserialization: %s, %d\n", F->filename, depth);
+    //    const char *name; [short, str]
+    F->name = readStr(J, buffer);
+    //    int script; [short]
+    F->script = readShort(J, buffer);
+    //    int lightweight;[short]
+    F->lightweight = readShort(J, buffer);
+    //    int strict;[short]
+    F->strict = readShort(J, buffer);
+    //    int arguments;[short]
+    F->arguments = readShort(J, buffer);
+    //    int numparams;[short]
+    F->numparams = readShort(J, buffer);
+    //
+    //    int codecap, codelen; [int]
+    //    unsigned int *code; [short] array
+    F->codelen = readInt(J, buffer);
+    F->codecap = F->codelen;
+    F->code = js_realloc(J, F->code, F->codelen * sizeof *F->code);
+    for(int i = 0; i < F->codelen; ++i) {
+        F->code[i] = readShort(J, buffer);
+    }
+    //
+    //    int numcap, numlen;[int]
+    //    double *numtab;[double] array
+    F->numlen = readInt(J, buffer);
+    F->numcap = F->numlen;
+    if(F->numlen > 0) F->numtab = js_realloc(J, F->numtab, F->numlen * sizeof *F->numtab);
+    for(int i = 0; i < F->numlen; ++i) {
+        F->numtab[i] = readDouble(J, buffer);
+    }
+    //
+    //    int strcap, strlen;[int]
+    //    const char **strtab;[short, str] array
+    F->strlen = readInt(J, buffer);
+    F->strcap = F->strlen;
+    if(F->strlen > 0) F->strtab = js_realloc(J, F->strtab, F->strlen * sizeof *F->strtab);
+    for(int i = 0; i < F->strlen; ++i) {
+        F->strtab[i] = readStr(J, buffer);
+    }
+    //
+    //    int varcap, varlen;[int]
+    //    const char **vartab;[short, str] array
+    F->varlen = readInt(J, buffer);
+    F->varcap = F->varlen;
+    if(F->varlen > 0) F->vartab = js_realloc(J, F->vartab, F->varlen * sizeof *F->vartab);
+    for(int i = 0; i < F->varlen; ++i) {
+        F->vartab[i] = readStr(J, buffer);
+    }
+    //
+    //    int line, lastline; [int] [int]
+    F->line = readInt(J, buffer);
+    F->lastline = readInt(J, buffer);
+    //
+    //    int funcap, funlen; [short]
+    F->funlen = readShort(J, buffer);
+    F->funcap = F->funlen;
+    //    Function **funtab; [fun] array
+    if(F->funlen > 0) {
+        F->funtab = js_realloc(J, F->funtab, F->funlen * sizeof *F->funtab);
+        for(int i = 0; i < F->funlen; ++i) {
+            F->funtab[i] = jsC_function_deserialization(J, F->filename, buffer, depth + 1);
+            F->funtab[i]->codebits = NULL;
+        }
+    }
+    F->gcmark = JS_OBJ_FROZEN;
+    return F;
 }

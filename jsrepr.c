@@ -2,6 +2,8 @@
 #include "jslex.h"
 #include "jsvalue.h"
 #include "jsbuiltin.h"
+#include "utf.h"
+#include "jscompile.h"
 
 static void reprvalue(js_State *J, js_Buffer **sb);
 

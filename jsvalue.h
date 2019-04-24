@@ -114,7 +114,7 @@ struct js_Object
 			void *data;
 			js_HasProperty has;
 			js_Put put;
-			js_Delete delete;
+			js_Delete deleteFun;
 			js_Finalize finalize;
 		} user;
 	} u;
@@ -144,6 +144,7 @@ js_String *jsV_newmemstring(js_State *J, const char *s, int n);
 js_Value *js_tovalue(js_State *J, int idx);
 void js_toprimitive(js_State *J, int idx, int hint);
 js_Object *js_toobject(js_State *J, int idx);
+js_Object *js_asobject(js_State *J, int idx);
 void js_pushvalue(js_State *J, js_Value v);
 void js_pushobject(js_State *J, js_Object *v);
 
@@ -182,5 +183,9 @@ void jsV_resizearray(js_State *J, js_Object *obj, int newlen);
 /* jsdump.c */
 void js_dumpobject(js_State *J, js_Object *obj);
 void js_dumpvalue(js_State *J, js_Value v);
+
+void js_frozen(js_State *J, int idx);
+void js_frozen_all(js_State *J);
+void js_dispose(js_State *J, int idx);
 
 #endif

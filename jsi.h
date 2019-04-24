@@ -13,6 +13,8 @@
 #include <float.h>
 #include <limits.h>
 
+#define JS_OBJ_FROZEN  -1
+
 /* Microsoft Visual C */
 #ifdef _MSC_VER
 #pragma warning(disable:4996) /* _CRT_SECURE_NO_WARNINGS */
@@ -55,6 +57,7 @@ static __inline int signbit(double x) { __int64 i; memcpy(&i, &x, 8); return i>>
 void *js_malloc(js_State *J, int size);
 void *js_realloc(js_State *J, void *ptr, int size);
 void js_free(js_State *J, void *ptr);
+void js_stacktrace(js_State *J);
 
 typedef struct js_Regexp js_Regexp;
 typedef struct js_Value js_Value;

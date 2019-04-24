@@ -9,6 +9,7 @@ static void jsB_Function(js_State *J)
 	int i, top = js_gettop(J);
 	js_Buffer *sb = NULL;
 	const char *body;
+    const char *path;
 	js_Ast *parse;
 	js_Function *fun;
 
@@ -20,19 +21,22 @@ static void jsB_Function(js_State *J)
 
 	/* p1, p2, ..., pn */
 	if (top > 2) {
-		for (i = 1; i < top - 1; ++i) {
+		for (i = 1; i < top - 2; ++i) {
 			if (i > 1)
 				js_putc(J, &sb, ',');
-			js_puts(J, &sb, js_tostring(J, i));
+            const char* str = js_tostring(J, i);
+			js_puts(J, &sb, str);
 		}
 		js_putc(J, &sb, ')');
 		js_putc(J, &sb, 0);
 	}
 
 	/* body */
-	body = js_isdefined(J, top - 1) ? js_tostring(J, top - 1) : "";
+	body = js_isdefined(J, top - 2) ? js_tostring(J, top - 2) : "";
+    /* path */
+    path = js_isdefined(J, top - 1) ? js_tostring(J, top - 1) : "[string]";
 
-	parse = jsP_parsefunction(J, "[string]", sb ? sb->s : NULL, body);
+	parse = jsP_parsefunction(J, path, sb ? sb->s : NULL, body);
 	fun = jsC_compilefunction(J, parse);
 
 	js_endtry(J);

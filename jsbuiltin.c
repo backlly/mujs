@@ -3,6 +3,7 @@
 #include "jscompile.h"
 #include "jsvalue.h"
 #include "jsbuiltin.h"
+#include "utf.h"
 
 static void jsB_globalf(js_State *J, const char *name, js_CFunction cfun, int n)
 {
@@ -189,6 +190,116 @@ static void jsB_encodeURIComponent(js_State *J)
 	Encode(J, js_tostring(J, 1), URIUNESCAPED);
 }
 
+static void jsB_escape(js_State *J) {
+    static const char *HEX = "0123456789ABCDEF";
+    js_Buffer *buffer = NULL;
+    js_Buffer **sb = &buffer;
+    const char* s = js_isdefined(J, 1) ? js_tostring(J, 1) : NULL;
+    Rune c;
+    if(s == NULL) {
+        js_pushstring(J, "");
+        return;
+    }
+    while (*s) {
+        s += chartorune(&c, s);
+        switch (c) {
+            case '"': js_puts(J, sb, "\\\""); break;
+            case '\\': js_puts(J, sb, "\\\\"); break;
+            case '\b': js_puts(J, sb, "\\b"); break;
+            case '\f': js_puts(J, sb, "\\f"); break;
+            case '\n': js_puts(J, sb, "\\n"); break;
+            case '\r': js_puts(J, sb, "\\r"); break;
+            case '\t': js_puts(J, sb, "\\t"); break;
+            default:
+                if (c < ' ' || c > 127) {
+                    js_puts(J, sb, "\\u");
+                    js_putc(J, sb, HEX[(c>>12)&15]);
+                    js_putc(J, sb, HEX[(c>>8)&15]);
+                    js_putc(J, sb, HEX[(c>>4)&15]);
+                    js_putc(J, sb, HEX[c&15]);
+                } else {
+                    js_putc(J, sb, c); break;
+                }
+        }
+    }
+    if(buffer) {
+        js_putc(J, sb, 0);
+    }
+    js_pushstring(J, buffer ? buffer->s : "");
+    js_free(J, buffer);
+}
+
+static inline const char* jsB_unescape_next(const char* haystack, int* ret) {
+    Rune rune = 0;
+    if(haystack && *haystack != '\0') {
+        haystack += chartorune(&rune, haystack);
+        /* consume CR LF as one unit */
+        if (rune == '\r' && *haystack == '\n')
+            ++haystack;
+        if (jsY_isnewline(rune)) {
+            rune = '\n';
+        }
+    }
+    *ret = rune;
+    return haystack;
+}
+static void jsB_unescape(js_State *J) {
+    const char* haystack = js_isdefined(J, 1) ? js_tostring(J, 1) : NULL;
+    js_Buffer *buffer = NULL;
+    js_Buffer **sb = &buffer;
+    char tmp[8] = {0};
+    int lexchar = 0;
+    int x = 0;
+    int xLen = 0;
+    if(haystack) {
+        while (*haystack) {
+            haystack = jsB_unescape_next(haystack, &lexchar);
+            if(lexchar == '\\') {
+                haystack = jsB_unescape_next(haystack, &lexchar);
+                switch (lexchar) {
+                    case 'u':
+                        haystack = jsB_unescape_next(haystack, &lexchar);
+                        if (jsY_ishex(lexchar)) { x = (jsY_tohex(lexchar) << 12); } else { js_putc(J, sb, lexchar); break; }
+                        haystack = jsB_unescape_next(haystack, &lexchar);
+                        if (jsY_ishex(lexchar)) { x |= (jsY_tohex(lexchar) << 8); } else { js_putc(J, sb, lexchar); break; }
+                        haystack = jsB_unescape_next(haystack, &lexchar);
+                        if (jsY_ishex(lexchar)) { x |= (jsY_tohex(lexchar) << 4); } else { js_putc(J, sb, lexchar); break; }
+                        haystack = jsB_unescape_next(haystack, &lexchar);
+                        if (jsY_ishex(lexchar)) { x |= (jsY_tohex(lexchar) << 0); } else { js_putc(J, sb, lexchar); break; }
+                        if(x > 127) {
+                            xLen = runetochar(tmp, (const Rune *)&x);
+                            for( x = 0 ; x < xLen; ++x) {
+                                js_putc(J, sb, tmp[x]);
+                            }
+                        } else {
+                            js_putc(J, sb, x);
+                        }
+                        break;
+                    case '"': js_putc(J, sb, '"');   break;
+                    case '\\': js_putc(J, sb, '\\'); break;
+                    case 'b': js_putc(J, sb, '\b');  break;
+                    case 'f': js_putc(J, sb, '\f');  break;
+                    case 'n': js_putc(J, sb, '\n');  break;
+                    case 'r': js_putc(J, sb, '\r');  break;
+                    case 't': js_putc(J, sb, '\t');  break;
+                    default:
+                        js_report(J, "invalid escape sequence");
+                        break;
+                }
+            } else {
+                js_putc(J, sb, lexchar);
+            }
+        }
+        if(buffer) {
+            js_putc(J, &buffer, 0);
+        }
+        js_pushstring(J, buffer ? buffer->s : "");
+        js_free(J, buffer);
+    } else {
+        js_pushstring(J, "");
+    }
+}
+
 void jsB_init(js_State *J)
 {
 	/* Create the prototype objects here, before the constructors */
@@ -242,4 +353,8 @@ void jsB_init(js_State *J)
 	jsB_globalf(J, "decodeURIComponent", jsB_decodeURIComponent, 1);
 	jsB_globalf(J, "encodeURI", jsB_encodeURI, 1);
 	jsB_globalf(J, "encodeURIComponent", jsB_encodeURIComponent, 1);
+    // 用 Unicode 字符 \u00xx 和 \uxxxx 这样的字符序列进行解码
+    jsB_globalf(J, "escape", jsB_escape, 1);
+    // 对通过 escape() 编码的字符串进行解码
+    jsB_globalf(J, "unescape", jsB_unescape, 1);
 }

@@ -150,7 +150,7 @@ js_Object *jsV_newobject(js_State *J, enum js_Class type, js_Object *prototype)
 {
 	js_Object *obj = js_malloc(J, sizeof *obj);
 	memset(obj, 0, sizeof *obj);
-	obj->gcmark = 0;
+	obj->gcmark = J->gcmark;
 	obj->gcnext = J->gcobj;
 	J->gcobj = obj;
 	++J->gccounter;

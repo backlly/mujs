@@ -97,6 +97,25 @@ static void Math_random(js_State *J)
 	js_pushnumber(J, jsM_rand_r(&J->seed) / (JS_RAND_MAX + 1.0));
 }
 
+static void Math_nextInt(js_State *J) {
+    double jsmin = js_tonumber(J, 1);
+    double jsmax = js_tonumber(J, 2);
+    if(js_isnumber(J, 1)) {
+        if( js_isnumber(J, 2) && (int)(jsmax - jsmin) > 0 ) {
+            // Math.nextInt(xxx, xxx);
+            js_pushnumber(J, jsmin + rand() % (int)(jsmax - jsmin));
+        } else if((int)jsmin > 0) {
+            // Math.nextInt(xxx);
+            js_pushnumber(J, rand() % (int)jsmin);
+        } else {
+            js_pushnumber(J, rand());
+        }
+    } else {
+        // Math.nextInt();
+        js_pushnumber(J, rand());
+    }
+}
+
 static void Math_round(js_State *J)
 {
 	double x = js_tonumber(J, 1);
@@ -187,6 +206,7 @@ void jsB_initmath(js_State *J)
 		jsB_propf(J, "Math.sin", Math_sin, 1);
 		jsB_propf(J, "Math.sqrt", Math_sqrt, 1);
 		jsB_propf(J, "Math.tan", Math_tan, 1);
+        jsB_propf(J, "Math.nextInt", Math_nextInt, 2);
 	}
 	js_defglobal(J, "Math", JS_DONTENUM);
 }

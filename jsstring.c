@@ -4,6 +4,11 @@
 #include "utf.h"
 #include "regexp.h"
 
+#if defined(WIN32) || defined(WIN64)
+    #include "Shlwapi.h"
+    #define strncasecmp _strnicmp
+#endif
+
 static int js_doregexec(js_State *J, Reprog *prog, const char *string, Resub *sub, int eflags)
 {
 	int result = js_regexec(prog, string, sub, eflags);
@@ -144,14 +149,63 @@ static void Sp_concat(js_State *J)
 	js_free(J, out);
 }
 
+static void Sp_cut(js_State *J)
+{
+    const char *src = checkstring(J, 0);
+    const char *haystack = src;
+    const char *needleStart = js_tostring(J, 1);
+    const char *needleEnd = js_tostring(J, 2);
+    int includeStart = js_toboolean(J, 3);
+    int includeEnd = js_toboolean(J, 4);
+    int lenStart = (int)strlen(needleStart);
+    int lenEnd = (int)strlen(needleEnd);
+    int size = (int)strlen(haystack);
+    int indexStart = 0;
+    int indexEnd = 0;
+    int findStart = 0;
+    int findEnd = 0;
+    Rune rune;
+    int k = 0;
+    while (*haystack) {
+        if (findStart == 0 && !strncmp(haystack, needleStart, lenStart)) {
+            indexStart = (int)(haystack - src);
+            findStart = 1;
+            if(!includeStart) {
+                indexStart = (int)(haystack - src) + lenStart;
+            }
+        } else if (findStart == 1 && !strncmp(haystack, needleEnd, lenEnd)) {
+            indexEnd = (int)(haystack - src);
+            findEnd = 1;
+            if(includeEnd) {
+                indexEnd = (int)(haystack - src) + lenStart;
+            }
+            break;
+        }
+        haystack += chartorune(&rune, haystack);
+        ++k;
+    }
+    if(findStart == 0) {
+        js_pushstring(J, "");
+    } else if(findEnd == 0) {
+        js_pushlstring(J, src + indexStart, size - indexStart);
+    } else {
+        js_pushlstring(J, src + indexStart, indexEnd - indexStart);
+    }
+}
+
 static void Sp_indexOf(js_State *J)
 {
 	const char *haystack = checkstring(J, 0);
 	const char *needle = js_tostring(J, 1);
 	int pos = js_tointeger(J, 2);
-	int len = strlen(needle);
+	int len = (int)strlen(needle);
+    int size = (int)utflen(haystack);
 	int k = 0;
 	Rune rune;
+    if(pos >= size) {
+        js_pushnumber(J, -1);
+        return;
+    }
 	while (*haystack) {
 		if (k >= pos && !strncmp(haystack, needle, len)) {
 			js_pushnumber(J, k);
@@ -168,7 +222,7 @@ static void Sp_lastIndexOf(js_State *J)
 	const char *haystack = checkstring(J, 0);
 	const char *needle = js_tostring(J, 1);
 	int pos = js_isdefined(J, 2) ? js_tointeger(J, 2) : (int)strlen(haystack);
-	int len = strlen(needle);
+	int len = (int)strlen(needle);
 	int k = 0, last = -1;
 	Rune rune;
 	while (*haystack && k <= pos) {
@@ -212,6 +266,7 @@ static void Sp_slice(js_State *J)
 	js_pushlstring(J, ss, ee - ss);
 }
 
+// 提取字符串中两个指定的索引号之间的字符。
 static void Sp_substring(js_State *J)
 {
 	const char *str = checkstring(J, 0);
@@ -220,8 +275,8 @@ static void Sp_substring(js_State *J)
 	int s = js_tointeger(J, 1);
 	int e = js_isdefined(J, 2) ? js_tointeger(J, 2) : len;
 
-	s = s < 0 ? 0 : s > len ? len : s;
-	e = e < 0 ? 0 : e > len ? len : e;
+	s = s < 0 ? 0 : (s > len ? len : s);
+	e = e < 0 ? 0 : (e > len ? len : e);
 
 	if (s < e) {
 		ss = js_utfidxtoptr(str, s);
@@ -231,7 +286,28 @@ static void Sp_substring(js_State *J)
 		ee = js_utfidxtoptr(ss, s - e);
 	}
 
-	js_pushlstring(J, ss, ee - ss);
+	js_pushlstring(J, ss, (int)(ee - ss));
+}
+// 从起始索引号提取字符串中指定数目的字符。
+static void Sp_substr(js_State *J) {
+    const char *str = checkstring(J, 0);
+    const char *ss, *ee;
+    int len = utflen(str);
+    int s = js_tointeger(J, 1);
+    int e = js_isdefined(J, 2) ? s + js_tointeger(J, 2) : len;
+
+    s = s < 0 ? 0 : (s > len ? len : s);
+    e = e < 0 ? 0 : (e > len ? len : e);
+
+    if (s < e) {
+        ss = js_utfidxtoptr(str, s);
+        ee = js_utfidxtoptr(ss, e - s);
+    } else {
+        ss = js_utfidxtoptr(str, e);
+        ee = js_utfidxtoptr(ss, s - e);
+    }
+
+    js_pushlstring(J, ss, (int)(ee - ss));
 }
 
 static void Sp_toLowerCase(js_State *J)
@@ -674,6 +750,71 @@ static void Sp_split(js_State *J)
 	}
 }
 
+static void Sp_repeat(js_State *J)
+{
+    int n, i, len;
+    char * volatile out;
+    const char *s = checkstring(J, 0);
+    int count = js_tointeger(J, 1);
+    if(count > 0) {
+        n = (int)strlen(s);
+        len = count * n;
+        out = js_malloc(J, len + 1);
+        if(n == 1) {
+            memset(out, s[0], len);
+        } else {
+            memset(out, 0, len + 1);
+            for (i = 0; i < count; ++i) {
+                strcat(out, s);
+            }
+        }
+        js_pushlstring(J, out, len);
+        js_free(J, out);
+    } else {
+        js_pushstring(J, "");
+    }
+}
+
+static void Sp_endWith(js_State *J)
+{
+    int lenstr, lencheck, ret = 0;
+    const char *str = checkstring(J, 0);
+    const char *check = js_tostring(J, 1);
+    int ignoreCase = js_isdefined(J, 2) ? js_toboolean(J, 2) : 1;
+    if(str && check) {
+        lenstr = (int)strlen(str);
+        lencheck = (int)strlen(check);
+        if(lencheck > lenstr) {
+            ret = 0;
+        } else if(ignoreCase && strncasecmp(str + (lenstr - lencheck), check, lencheck) == 0) {
+            ret = 1;
+        } else if(!ignoreCase && memcmp(str + (lenstr - lencheck), check, lencheck) == 0) {
+            ret = 1;
+        }
+    }
+    js_pushboolean(J, ret);
+}
+
+static void Sp_startWith(js_State *J)
+{
+    int lenstr, lencheck, ret = 0;
+    const char *str = checkstring(J, 0);
+    const char *check = js_tostring(J, 1);
+    int ignoreCase = js_isdefined(J, 2) ? js_tointeger(J, 2) : 0;
+    if(str && check) {
+        lenstr = (int)strlen(str);
+        lencheck = (int)strlen(check);
+        if(lencheck > lenstr) {
+            ret = 0;
+        } else if(ignoreCase && strncasecmp(str, check, lencheck) == 0) {
+            ret = 1;
+        } else if(!ignoreCase && memcmp(str, check, lencheck) == 0) {
+            ret = 1;
+        }
+    }
+    js_pushboolean(J, ret);
+}
+
 void jsB_initstring(js_State *J)
 {
 	J->String_prototype->u.s.string = "";
@@ -694,11 +835,16 @@ void jsB_initstring(js_State *J)
 		jsB_propf(J, "String.prototype.search", Sp_search, 1);
 		jsB_propf(J, "String.prototype.slice", Sp_slice, 2);
 		jsB_propf(J, "String.prototype.split", Sp_split, 2);
-		jsB_propf(J, "String.prototype.substring", Sp_substring, 2);
+        jsB_propf(J, "String.prototype.substr", Sp_substr, 2); // [start, length]
+		jsB_propf(J, "String.prototype.substring", Sp_substring, 2); // [start, end]
 		jsB_propf(J, "String.prototype.toLowerCase", Sp_toLowerCase, 0);
 		jsB_propf(J, "String.prototype.toLocaleLowerCase", Sp_toLowerCase, 0);
 		jsB_propf(J, "String.prototype.toUpperCase", Sp_toUpperCase, 0);
 		jsB_propf(J, "String.prototype.toLocaleUpperCase", Sp_toUpperCase, 0);
+        jsB_propf(J, "String.prototype.repeat", Sp_repeat, 1);
+        jsB_propf(J, "String.prototype.endWith", Sp_endWith, 1);
+        jsB_propf(J, "String.prototype.startWith", Sp_startWith, 1);
+        jsB_propf(J, "String.prototype.cut", Sp_cut, 4);
 
 		/* ES5 */
 		jsB_propf(J, "String.prototype.trim", Sp_trim, 0);
